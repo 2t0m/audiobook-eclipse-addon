@@ -1,0 +1,24 @@
+services:
+  audiobook-addon:
+    #image: ghcr.io/2t0m/audiobook-eclipse-addon:main
+    image: audiobook-eclipse-addon:latest
+    container_name: audiobook-eclipse-addon
+    restart: unless-stopped
+    environment:
+      - C411_API_KEY=${C411_API_KEY}
+      - ALLDEBRID_API_KEY=${ALLDEBRID_API_KEY}
+      - ECLIPSE_API_KEY=${ECLIPSE_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "5001:5001"
+    volumes:
+      - audiobook-config:/app/cache
+    networks:
+      - npm-network
+
+volumes:
+  audiobook-config:
+
+networks:
+  npm-network:
+    external: true
