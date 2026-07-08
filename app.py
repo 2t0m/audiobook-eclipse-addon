@@ -15,9 +15,6 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from helpers import TorznabClient, AllDebridClient, AudibleClient
-from routes import register_all_routes
-
 # Configure logging level from environment
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 log_level_map = {
@@ -28,11 +25,37 @@ log_level_map = {
     'CRITICAL': logging.CRITICAL
 }
 
+# Custom formatter to match Gunicorn style
+class GunicornFormatter(logging.Formatter):
+    def format(self, record):
+        # Extract tag from logger name
+        logger_name = record.name.split('.')[-1]
+        tag_map = {
+            'app': 'App',
+            'helpers': 'API',
+            'search': 'Search',
+            'album': 'Album',
+            'stream': 'Stream',
+            'track': 'Track'
+        }
+        tag = tag_map.get(logger_name, logger_name.capitalize())
+        
+        # Format: [YYYY-MM-DD HH:MM:SS +0000] [PID] [LEVEL] [Tag] Message
+        timestamp = self.formatTime(record, '%Y-%m-%d %H:%M:%S %z')
+        pid = os.getpid()
+        return f"[{timestamp}] [{pid}] [{record.levelname}] [{tag}] {record.getMessage()}"
+
+# Configure root logger with custom formatter BEFORE importing helpers
+handler = logging.StreamHandler()
+handler.setFormatter(GunicornFormatter())
 logging.basicConfig(
     level=log_level_map.get(LOG_LEVEL, logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    handlers=[handler]
 )
 logger = logging.getLogger(__name__)
+
+from helpers import TorznabClient, AllDebridClient, AudibleClient
+from routes import register_all_routes
 
 # Initialize Flask app
 app = Flask(__name__)

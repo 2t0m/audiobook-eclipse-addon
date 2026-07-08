@@ -5,6 +5,7 @@ services:
     container_name: audiobook-eclipse-addon
     restart: unless-stopped
     environment:
+      - TZ=Europe/Paris
       - C411_API_KEY=${C411_API_KEY}
       - ALLDEBRID_API_KEY=${ALLDEBRID_API_KEY}
       - ECLIPSE_API_KEY=${ECLIPSE_API_KEY}

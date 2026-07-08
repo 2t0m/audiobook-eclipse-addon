@@ -12,8 +12,7 @@ import json
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Get logger (configured in app.py)
 logger = logging.getLogger(__name__)
 
 # Persistent cache file path
@@ -46,13 +45,10 @@ def _load_persistent_cache():
                     if 'timestamp' in info and isinstance(info['timestamp'], str):
                         info['timestamp'] = datetime.fromisoformat(info['timestamp'])
                 _track_file_cache = data
-                print(f"✓ Loaded {len(_track_file_cache)} tracks from persistent cache", flush=True)
                 logger.info(f"Loaded {len(_track_file_cache)} tracks from persistent cache")
         else:
-            print(f"✓ No persistent cache file found at {TRACK_CACHE_FILE}", flush=True)
             logger.info(f"No persistent cache file found")
     except Exception as e:
-        print(f"✗ Failed to load persistent cache: {e}", flush=True)
         logger.error(f"Failed to load persistent cache: {e}")
         _track_file_cache = {}
 
@@ -209,15 +205,11 @@ class AudibleClient:
         Returns: {title, author, narrator, artwork_url, description, release_date, runtime_length_min}
         """
         try:
-            # Normalize title and author for better matching
-            normalized_title = self.normalize_for_search(title)
-            normalized_author = self.normalize_for_search(author) if author else None
-            
-            # Build search query
-            if normalized_author:
-                search_query = f'{normalized_title} {normalized_author}'
+            # Build search query with original text (don't normalize - Audible handles accents well)
+            if author:
+                search_query = f'{title} {author}'
             else:
-                search_query = normalized_title
+                search_query = title
             
             params = {
                 'response_groups': 'contributors,product_desc,product_attrs,series,media',
@@ -227,7 +219,7 @@ class AudibleClient:
                 'keywords': search_query
             }
             
-            logger.info(f"Searching Audible API for: {title} (normalized: {search_query})")
+            logger.debug(f"Searching Audible API for: {title} (query: {search_query})")
             
             response = self.session.get(
                 self.base_url,
@@ -243,7 +235,7 @@ class AudibleClient:
             products = data.get('products', [])
             
             if not products:
-                logger.info(f"✗ No Audible results for: {search_query}")
+                logger.debug(f"✗ No Audible results for: {search_query}")
                 return None
             
             # Take first result
@@ -275,11 +267,11 @@ class AudibleClient:
                         if '/images/I/' in url:
                             image_id = url.split('/images/I/')[1].split('.')[0]
                             artwork_url = f"https://m.media-amazon.com/images/I/{image_id}._SL500_.jpg"
-                            logger.info(f"✓ Artwork extracted: {image_id}")
+                            logger.debug(f"✓ Artwork extracted: {image_id}")
                             break
             
             if not artwork_url:
-                logger.warning(f"✗ No artwork for: {book_title}")
+                logger.debug(f"✗ No artwork for: {book_title}")
             
             # Extract description
             description = book.get('publisher_summary', '')
@@ -303,7 +295,7 @@ class AudibleClient:
                 'runtime_length_min': runtime_min
             }
             
-            logger.info(f"✓ Audible match: {book_title} by {author_str}")
+            logger.debug(f"✓ Audible match: {book_title} by {author_str}")
             return result
             
         except Exception as e:
