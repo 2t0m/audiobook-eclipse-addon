@@ -9,7 +9,8 @@ services:
       - C411_API_KEY=${C411_API_KEY}
       - ALLDEBRID_API_KEY=${ALLDEBRID_API_KEY}
       - ECLIPSE_API_KEY=${ECLIPSE_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - APP_LOG_LEVEL=${APP_LOG_LEVEL:-INFO}
+      - GUNICORN_LOG_LEVEL=${GUNICORN_LOG_LEVEL:-WARNING}
     ports:
       - "5001:5001"
     volumes:

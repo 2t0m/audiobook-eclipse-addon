@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configure logging level from environment
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+APP_LOG_LEVEL = os.environ.get('APP_LOG_LEVEL', 'INFO').upper()
 log_level_map = {
     'DEBUG': logging.DEBUG,
     'INFO': logging.INFO,
@@ -49,7 +49,7 @@ class GunicornFormatter(logging.Formatter):
 handler = logging.StreamHandler()
 handler.setFormatter(GunicornFormatter())
 logging.basicConfig(
-    level=log_level_map.get(LOG_LEVEL, logging.INFO),
+    level=log_level_map.get(APP_LOG_LEVEL, logging.INFO),
     handlers=[handler]
 )
 logger = logging.getLogger(__name__)
@@ -76,7 +76,8 @@ if not ALLDEBRID_API_KEY:
     raise ValueError("ALLDEBRID_API_KEY not configured")
 
 logger.info("Configuration loaded successfully")
-logger.info(f"Log level: {LOG_LEVEL}")
+logger.info(f"App log level: {APP_LOG_LEVEL}")
+logger.info(f"Gunicorn log level: {os.environ.get('GUNICORN_LOG_LEVEL', 'WARNING').upper()}")
 logger.info(f"Token validation: {'enabled' if ECLIPSE_API_KEY else 'disabled'}")
 
 # Create HTTP session with connection pooling and retries

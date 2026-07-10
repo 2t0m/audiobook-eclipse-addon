@@ -29,6 +29,23 @@ EXPOSE 5001
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV APP_LOG_LEVEL=INFO
+ENV GUNICORN_LOG_LEVEL=WARNING
 
-# Run with Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5001", "--workers", "1", "--threads", "4", "--timeout", "300", "app:app"]
+# Run with Gunicorn with dynamic log level
+CMD GUNICORN_LEVEL=$(echo "${GUNICORN_LOG_LEVEL:-WARNING}" | tr '[:upper:]' '[:lower:]') && \
+    if [ "$GUNICORN_LEVEL" = "info" ] || [ "$GUNICORN_LEVEL" = "debug" ]; then \
+        ACCESS_LOG="-"; \
+    else \
+        ACCESS_LOG="/dev/null"; \
+    fi && \
+    exec gunicorn \
+    --bind 0.0.0.0:5001 \
+    --workers 1 \
+    --threads 4 \
+    --timeout 300 \
+    --log-level "$GUNICORN_LEVEL" \
+    --access-logfile "$ACCESS_LOG" \
+    --error-logfile - \
+    --capture-output \
+    app:app

@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Persistent cache file path
 CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
 TRACK_CACHE_FILE = os.path.join(CACHE_DIR, 'track_file_cache.json')
+MAGNET_CACHE_FILE = os.path.join(CACHE_DIR, 'track_magnet_cache.json')
 
 # Ensure cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -35,7 +36,7 @@ PERSISTENT_CACHE_TTL = 30 * 24 * 3600  # 30 days for persistent track cache
 
 def _load_persistent_cache():
     """Load track file cache from disk"""
-    global _track_file_cache
+    global _track_file_cache, _track_magnet_cache
     try:
         if os.path.exists(TRACK_CACHE_FILE):
             with open(TRACK_CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -51,10 +52,30 @@ def _load_persistent_cache():
     except Exception as e:
         logger.error(f"Failed to load persistent cache: {e}")
         _track_file_cache = {}
+    
+    # Load magnet cache
+    try:
+        if os.path.exists(MAGNET_CACHE_FILE):
+            with open(MAGNET_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Convert to (magnet_url, timestamp) tuples
+                for album_id, info in data.items():
+                    magnet_url = info['magnet_url']
+                    timestamp_str = info.get('timestamp')
+                    if timestamp_str:
+                        timestamp = datetime.fromisoformat(timestamp_str)
+                    else:
+                        timestamp = datetime.now()
+                    _track_magnet_cache[album_id] = (magnet_url, timestamp)
+                logger.info(f"Loaded {len(_track_magnet_cache)} magnet mappings from persistent cache")
+    except Exception as e:
+        logger.error(f"Failed to load magnet cache: {e}")
+        _track_magnet_cache = {}
 
 
 def _save_persistent_cache():
-    """Save track file cache to disk"""
+    """Save track file cache and magnet cache to disk"""
+    # Save track file cache
     try:
         # Convert datetime objects to ISO format strings for JSON serialization
         data = {}
@@ -71,6 +92,21 @@ def _save_persistent_cache():
         logger.debug(f"Saved {len(data)} tracks to persistent cache")
     except Exception as e:
         logger.error(f"Failed to save persistent cache: {e}")
+    
+    # Save magnet cache
+    try:
+        data = {}
+        for album_id, (magnet_url, timestamp) in _track_magnet_cache.items():
+            data[album_id] = {
+                'magnet_url': magnet_url,
+                'timestamp': timestamp.isoformat() if isinstance(timestamp, datetime) else timestamp
+            }
+        
+        with open(MAGNET_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        logger.debug(f"Saved {len(data)} magnet mappings to persistent cache")
+    except Exception as e:
+        logger.error(f"Failed to save magnet cache: {e}")
 
 
 # Load cache on module import
@@ -113,6 +149,8 @@ def cache_magnet_status(magnet_hash: str, data: Dict):
 def cache_track_magnet(track_id: str, magnet_url: str):
     """Store track_id -> magnet_url mapping"""
     _track_magnet_cache[track_id] = (magnet_url, datetime.now())
+    # Save to disk immediately
+    _save_persistent_cache()
 
 
 def get_track_magnet(track_id: str) -> Optional[str]:
