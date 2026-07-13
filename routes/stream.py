@@ -12,6 +12,60 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def proxy_audio_stream(url, filename, content_type, streaming_session):
+    """
+    Proxy audio content from AllDebrid with Range request support
+    Used for streaming (not downloading)
+    """
+    try:
+        # Get Range header from client request
+        range_header = request.headers.get('Range')
+        headers = {}
+        
+        if range_header:
+            headers['Range'] = range_header
+            logger.debug(f"[Proxy] Forwarding Range request: {range_header}")
+        
+        # Make request to AllDebrid
+        response = streaming_session.get(url, headers=headers, stream=True, timeout=30)
+        
+        # Build response headers
+        response_headers = {
+            'Content-Type': content_type,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-cache',
+        }
+        
+        # Forward relevant headers from AllDebrid
+        if 'Content-Length' in response.headers:
+            response_headers['Content-Length'] = response.headers['Content-Length']
+        
+        if 'Content-Range' in response.headers:
+            response_headers['Content-Range'] = response.headers['Content-Range']
+        
+        # Set status code (206 for partial content, 200 for full)
+        status_code = response.status_code
+        
+        logger.info(f"[Proxy] Streaming {filename} | Status: {status_code} | Range: {range_header or 'Full'}")
+        
+        # Stream the response
+        def generate():
+            try:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+            except Exception as e:
+                logger.error(f"[Proxy] Error streaming: {e}")
+                raise
+        
+        return Response(generate(), status=status_code, headers=response_headers)
+        
+    except Exception as e:
+        logger.error(f"[Proxy] Failed to proxy stream: {e}")
+        return jsonify({'error': 'Stream proxy failed'}), 500
+
+
 def register_routes(app, api_key, alldebrid_client, streaming_session):
     """Register stream route"""
     
@@ -73,15 +127,39 @@ def register_routes(app, api_key, alldebrid_client, streaming_session):
                     file_format = 'mp3'
                     content_type = 'audio/mpeg'
                 
-                # Return direct AllDebrid URL (CORS works!)
-                logger.info(f"→ Returning direct AllDebrid URL: {filename}")
                 logger.debug(f"[Stream] File format detected: {file_format}, Content-Type: {content_type}")
                 
-                return jsonify({
-                    'url': unlocked_link,
-                    'format': file_format,
-                    'filename': filename
-                })
+                # Detect if this is a streaming request
+                # Method 1: Check for Range header (standard for streaming)
+                has_range = request.headers.get('Range') is not None
+                
+                # Method 2: Check User-Agent for known audio players
+                user_agent = request.headers.get('User-Agent', '').lower()
+                is_audio_player = any(player in user_agent for player in [
+                    'eclipse-android',      # Android Eclipse Music
+                    'vlc',
+                    'media',
+                    'audio',
+                    'player'
+                ])
+                
+                # Method 3: Exclude known download clients
+                is_downloader = 'okhttp' in user_agent and not is_audio_player
+                
+                is_streaming = (has_range or is_audio_player) and not is_downloader
+                
+                if is_streaming:
+                    # STREAMING MODE: Proxy the audio content
+                    logger.info(f"→ [STREAMING] Proxying audio content: {filename}")
+                    return proxy_audio_stream(unlocked_link, filename, content_type, streaming_session)
+                else:
+                    # DOWNLOAD MODE: Return direct URL
+                    logger.info(f"→ [DOWNLOAD] Returning direct AllDebrid URL: {filename}")
+                    return jsonify({
+                        'url': unlocked_link,
+                        'format': file_format,
+                        'filename': filename
+                    })
             else:
                 logger.error(f"✗ Failed to unlock track: {track_id_clean}")
                 return jsonify({'error': 'Failed to unlock stream'}), 500
@@ -240,9 +318,39 @@ def register_routes(app, api_key, alldebrid_client, streaming_session):
         # Cache the result
         cache_magnet_status(magnet_hash, response)
         
-        logger.info(f"→ Returning direct URL for: {filename}")
+        # Detect if this is a streaming request
+        # Method 1: Check for Range header (standard for streaming)
+        has_range = request.headers.get('Range') is not None
         
-        # Note: We could delete the magnet after streaming starts to free up AllDebrid quota
-        # alldebrid_client.delete_magnet(magnet_id)
+        # Method 2: Check User-Agent for known audio players
+        user_agent = request.headers.get('User-Agent', '').lower()
+        is_audio_player = any(player in user_agent for player in [
+            'eclipse-android',      # Android Eclipse Music
+            'vlc',
+            'media',
+            'audio',
+            'player'
+        ])
         
-        return jsonify(response)
+        # Method 3: Exclude known download clients
+        is_downloader = 'okhttp' in user_agent and not is_audio_player
+        
+        is_streaming = (has_range or is_audio_player) and not is_downloader
+        
+        if is_streaming:
+            # STREAMING MODE: Proxy the audio content
+            logger.info(f"→ [STREAMING] Proxying audio content: {filename}")
+            # Determine content type from format
+            content_types = {
+                'mp3': 'audio/mpeg',
+                'm4b': 'audio/x-m4b',
+                'm4a': 'audio/mp4'
+            }
+            content_type = content_types.get(file_format, 'audio/mpeg')
+            return proxy_audio_stream(stream_url, filename, content_type, streaming_session)
+        else:
+            # DOWNLOAD MODE: Return direct URL
+            logger.info(f"→ [DOWNLOAD] Returning direct URL for: {filename}")
+            # Note: We could delete the magnet after streaming starts to free up AllDebrid quota
+            # alldebrid_client.delete_magnet(magnet_id)
+            return jsonify(response)
