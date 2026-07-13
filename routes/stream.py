@@ -61,20 +61,26 @@ def register_routes(app, api_key, alldebrid_client, streaming_session):
                 # Detect file format from filename
                 filename = track_file.get('filename', '').lower()
                 file_format = 'mp3'  # default
+                content_type = 'audio/mpeg'
+                
                 if filename.endswith('.m4b'):
                     file_format = 'm4b'
+                    content_type = 'audio/x-m4b'
                 elif filename.endswith('.m4a'):
                     file_format = 'm4a'
+                    content_type = 'audio/mp4'
                 elif filename.endswith('.mp3'):
                     file_format = 'mp3'
+                    content_type = 'audio/mpeg'
                 
-                # Return direct link for audiobooks (Eclipse prefers direct links)
-                logger.info(f"→ Returning direct AllDebrid link for: {filename}")
+                # Return direct AllDebrid URL (CORS works!)
+                logger.info(f"→ Returning direct AllDebrid URL: {filename}")
+                logger.debug(f"[Stream] File format detected: {file_format}, Content-Type: {content_type}")
+                
                 return jsonify({
                     'url': unlocked_link,
                     'format': file_format,
-                    'quality': 'audiobook',
-                    'filename': track_file.get('filename', 'audiobook.mp3')
+                    'filename': filename
                 })
             else:
                 logger.error(f"✗ Failed to unlock track: {track_id_clean}")
@@ -161,10 +167,11 @@ def register_routes(app, api_key, alldebrid_client, streaming_session):
         # Generate hash for caching
         magnet_hash = hashlib.md5(magnet_url.encode()).hexdigest()
         
-        # Check cache first
+        # Check cache first and return direct URL
         cached = get_cached_magnet(magnet_hash)
         if cached and cached.get('url'):
             logger.info(f"Cache hit for magnet: {magnet_hash}")
+            logger.info(f"→ Returning cached direct URL: {cached.get('filename', 'unknown')}")
             return jsonify(cached)
         
         # Step 1: Upload magnet to AllDebrid
@@ -203,26 +210,37 @@ def register_routes(app, api_key, alldebrid_client, streaming_session):
             alldebrid_client.delete_magnet(magnet_id)
             return jsonify({'error': 'No audio files found in torrent'}), 404
         
-        # Step 5: Return stream URL
+        # Step 5: Return direct URL (no proxy needed)
         stream_url = best_file['link']
+        filename = best_file['name']
         file_format = 'mp3'  # default
         
-        if best_file['name'].lower().endswith('.m4b'):
+        if filename.lower().endswith('.m4b'):
             file_format = 'm4b'
-        elif best_file['name'].lower().endswith('.m4a'):
+        elif filename.lower().endswith('.m4a'):
             file_format = 'm4a'
+        elif filename.lower().endswith('.mp3'):
+            file_format = 'mp3'
+        
+        # Cache the file link for next time
+        cache_track_file(
+            track_id=track_id_clean,
+            album_id=track_id_clean,  # Use track_id as album_id for legacy entries
+            file_link=stream_url,
+            filename=filename
+        )
         
         response = {
             'url': stream_url,
             'format': file_format,
             'quality': 'audiobook',
-            'filename': best_file['name']
+            'filename': filename
         }
         
         # Cache the result
         cache_magnet_status(magnet_hash, response)
         
-        logger.info(f"Returning stream URL for: {best_file['name']}")
+        logger.info(f"→ Returning direct URL for: {filename}")
         
         # Note: We could delete the magnet after streaming starts to free up AllDebrid quota
         # alldebrid_client.delete_magnet(magnet_id)
