@@ -61,6 +61,9 @@ from routes import register_all_routes
 app = Flask(__name__)
 CORS(app)
 
+# Configure JSON encoding to preserve UTF-8 characters (French accents, œ, etc.)
+app.json.ensure_ascii = False
+
 # Configuration from environment variables
 C411_API_KEY = os.environ.get('C411_API_KEY')
 ALLDEBRID_API_KEY = os.environ.get('ALLDEBRID_API_KEY')

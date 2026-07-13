@@ -9,6 +9,8 @@ import xmltodict
 import requests
 import unicodedata
 import json
+import re
+import difflib
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 
@@ -227,15 +229,61 @@ class AudibleClient:
     
     @staticmethod
     def normalize_for_search(text: str) -> str:
-        """Normalize text for better search matching (remove accents, replace œ)"""
+        """Normalize text for better search matching (remove accents, replace œ, reconstruct apostrophes)"""
         if not text:
             return text
-        # Replace œ with oe before removing accents
+        
+        original = text
+        
+        # Step 1: Replace underscores with spaces
+        text = text.replace('_', ' ')
+        
+        # Step 2: Remove common suffixes and tags that pollute search
+        # Remove tags in brackets: [Audiobook], [MP3.128kbps], etc.
+        text = re.sub(r'\[.*?\]', '', text)
+        # Remove common language/format suffixes: .FR., .FR, .LANG., year patterns, trailing dots
+        text = re.sub(r'\.(FR|LANG|EN|US|UK)\.?', ' ', text, flags=re.IGNORECASE)
+        text = re.sub(r'\.20\d{2}\.?', ' ', text)  # .2019., .2024.
+        text = re.sub(r'\.19\d{2}\.?', ' ', text)  # .1999., .1984.
+        
+        # Step 3: Replace dots with spaces (except in acronyms like J.R.R.)
+        # Keep dots if surrounded by single uppercase letters (J.R.R. Tolkien)
+        # First, protect acronyms by replacing them temporarily
+        acronym_pattern = r'\b([A-Z]\.)+[A-Z]?\b'
+        acronyms = re.findall(acronym_pattern, text)
+        for i, acronym in enumerate(acronyms):
+            text = text.replace(acronym, f'ACRONYM{i}', 1)
+        
+        # Now replace remaining dots with spaces
+        text = text.replace('.', ' ')
+        
+        # Restore acronyms without dots: J.R.R → JRR
+        for i in range(len(acronyms)):
+            acronym_cleaned = acronyms[i].replace('.', '')
+            text = text.replace(f'ACRONYM{i}', acronym_cleaned)
+        
+        # Step 4: Reconstruct common French apostrophes (D Autres → D'Autres)
+        # Pattern matches: D/L/C/S/N/T/J/M/Qu followed by space and vowel (with or without accents)
+        apostrophe_pattern = r'\b([DLCSNTJMQdlcsntjmq]|[Qq][Uu])\s+([AEIOUYHaeiouyhÀÂÄÉÈÊËÏÎÔÙÛÜàâäéèêëïîôùûü])'
+        text = re.sub(apostrophe_pattern, r"\1'\2", text)
+        
+        # Step 5: Remove standalone years that may remain (19xx or 20xx)
+        text = re.sub(r'\b(19|20)\d{2}\b', '', text)
+        
+        # Step 6: Replace œ with oe before removing accents
         text = text.replace('œ', 'oe').replace('Œ', 'OE')
-        # Remove accents: é→e, à→a, etc.
+        
+        # Step 7: Remove accents: é→e, à→a, etc.
         nfd = unicodedata.normalize('NFD', text)
         without_accents = ''.join(char for char in nfd if unicodedata.category(char) != 'Mn')
-        return without_accents
+        
+        # Step 8: Clean up multiple spaces and trim
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        if text != original:
+            logger.debug(f"Normalized: '{original}' → '{text}'")
+        
+        return text
     
     def search_audiobook(self, title: str, author: str = None) -> Optional[Dict]:
         """
@@ -243,11 +291,16 @@ class AudibleClient:
         Returns: {title, author, narrator, artwork_url, description, release_date, runtime_length_min}
         """
         try:
-            # Build search query with original text (don't normalize - Audible handles accents well)
-            if author:
-                search_query = f'{title} {author}'
+            # Normalize title and author for better search matching
+            normalized_title = self.normalize_for_search(title)
+            normalized_author = self.normalize_for_search(author) if author else None
+            
+            # Build search query with normalized text
+            # Don't include "Unknown Author" in search - it pollutes results
+            if normalized_author and normalized_author.lower() not in ['unknown author', 'unknown', 'author']:
+                search_query = f'{normalized_title} {normalized_author}'
             else:
-                search_query = title
+                search_query = normalized_title
             
             params = {
                 'response_groups': 'contributors,product_desc,product_attrs,series,media',
@@ -257,7 +310,7 @@ class AudibleClient:
                 'keywords': search_query
             }
             
-            logger.debug(f"Searching Audible API for: {title} (query: {search_query})")
+            logger.debug(f"Searching Audible API with query: {search_query}")
             
             response = self.session.get(
                 self.base_url,
@@ -269,7 +322,8 @@ class AudibleClient:
                 logger.warning(f"Audible API returned status {response.status_code}")
                 return None
             
-            data = response.json()
+            # Decode response.content explicitly as UTF-8 to handle special chars (œ, é, etc.)
+            data = json.loads(response.content.decode('utf-8', errors='replace'))
             products = data.get('products', [])
             
             if not products:
@@ -279,8 +333,35 @@ class AudibleClient:
             # Take first result
             book = products[0]
             
-            # Extract title
+            # Extract title - try merchandising_summary first as it may have better encoding
             book_title = book.get('title', title)
+            
+            # If title seems corrupted (contains "c ur" pattern), try to extract from merchandising_summary
+            if 'c ur' in book_title.lower():
+                summary = book.get('merchandising_summary', '')
+                if summary:
+                    # Extract title from HTML: <i>Mon cœur a déménagé </i>
+                    import re as re_import
+                    title_match = re_import.search(r'<i>([^<]+)</i>', summary)
+                    if title_match:
+                        extracted_title = title_match.group(1).strip()
+                        logger.debug(f"Extracted better title from summary: '{book_title}' → '{extracted_title}'")
+                        book_title = extracted_title
+            
+            # Verify similarity between searched title and found title
+            # Normalize both for fair comparison
+            normalized_book_title = self.normalize_for_search(book_title)
+            similarity = difflib.SequenceMatcher(None, normalized_title.lower(), normalized_book_title.lower()).ratio()
+            
+            # If similarity is too low, don't match (avoid false positives)
+            SIMILARITY_THRESHOLD = 0.60  # 60% minimum similarity
+            if similarity < SIMILARITY_THRESHOLD:
+                logger.debug(f"✗ Audible match rejected: similarity {similarity:.2%} < {SIMILARITY_THRESHOLD:.0%}")
+                logger.debug(f"  Searched: '{normalized_title}'")
+                logger.debug(f"  Found: '{normalized_book_title}' ({book_title})")
+                return None
+            
+            logger.debug(f"✓ Audible match accepted: similarity {similarity:.2%}")
             
             # Extract authors
             authors = book.get('authors', [])
@@ -373,11 +454,14 @@ class TorznabClient:
             response = self.session.get(self.base_url, params=params, timeout=10)
             response.raise_for_status()
             
+            # Force UTF-8 encoding if not set correctly
+            response.encoding = 'utf-8'
+            
             # Log raw response for debugging
             logger.debug(f"Raw c411 response: {response.text[:2000]}...")
             
-            # Parse XML response
-            data = xmltodict.parse(response.content)
+            # Parse XML response (use response.text for proper UTF-8 decoding)
+            data = xmltodict.parse(response.text)
             
             if 'rss' not in data or 'channel' not in data['rss']:
                 logger.warning("Invalid Torznab response format")
