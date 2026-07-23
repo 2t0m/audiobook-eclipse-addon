@@ -10,10 +10,10 @@ from .unlock import register_routes as register_unlock_routes
 from .track import register_routes as register_track_routes
 
 
-def register_all_routes(app, api_key, torznab_client, alldebrid_client, audible_client, streaming_session):
+def register_all_routes(app, api_key, torznab_client, tr4ker_client, alldebrid_client, audible_client, streaming_session):
     """Register all route modules"""
     register_manifest_routes(app, api_key)
-    register_search_routes(app, api_key, torznab_client, alldebrid_client, audible_client)
+    register_search_routes(app, api_key, torznab_client, tr4ker_client, alldebrid_client, audible_client)
     register_stream_routes(app, api_key, alldebrid_client, streaming_session)
     register_album_routes(app, api_key, alldebrid_client)
     # register_unlock_routes(app, api_key, alldebrid_client)  # DISABLED: use /stream proxy only

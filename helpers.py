@@ -484,7 +484,7 @@ class TorznabClient:
                 if parsed:
                     results.append(parsed)
             
-            logger.info(f"Found {len(results)} audiobooks for query: {query}")
+            logger.info(f"Found {len(results)} audiobooks on c411 for query: {query}")
             
             # Cache results
             cache_search_results(query, results)
@@ -602,6 +602,191 @@ class TorznabClient:
         
         except Exception as e:
             logger.error(f"Error parsing item: {e}")
+            return None
+
+
+class Tr4kerClient:
+    """Client for TR4KER Torznab API"""
+    
+    def __init__(self, api_key: str, session: requests.Session):
+        self.base_url = "https://tr4ker.net/api"
+        self.api_key = api_key
+        self.session = session
+    
+    def search_audiobooks(self, query: str, limit: int = 50) -> List[Dict]:
+        """
+        Search for audiobooks on TR4KER
+        Returns list of results with: title, magnet, size, seeders, author
+        """
+        # Check cache first
+        cached = get_cached_search(f"tr4ker_{query}")
+        if cached is not None:
+            return cached
+        
+        params = {
+            't': 'search',
+            'apikey': self.api_key,
+            'q': query,
+            'cat': '3030',  # Audiobook category (Torznab standard)
+            'limit': limit,
+            'extended': '1'
+        }
+        
+        try:
+            logger.info(f"Searching TR4KER for: {query}")
+            response = self.session.get(self.base_url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            # Force UTF-8 encoding if not set correctly
+            response.encoding = 'utf-8'
+            
+            # Log raw response for debugging
+            logger.debug(f"Raw TR4KER response: {response.text[:2000]}...")
+            
+            # Parse XML response (use response.text for proper UTF-8 decoding)
+            data = xmltodict.parse(response.text)
+            
+            if 'rss' not in data or 'channel' not in data['rss']:
+                logger.warning("Invalid Torznab response format from TR4KER")
+                return []
+            
+            channel = data['rss']['channel']
+            items = channel.get('item', [])
+            
+            # Handle single item (not a list)
+            if isinstance(items, dict):
+                items = [items]
+            
+            results = []
+            for item in items:
+                # Log raw item for debugging
+                logger.debug(f"Raw TR4KER item: {item.get('title', 'N/A')}")
+                logger.debug(f"Item attributes: {item.get('torznab:attr', [])}")
+                
+                parsed = self._parse_torznab_item(item)
+                if parsed:
+                    # Add source tag to distinguish from c411
+                    parsed['source'] = 'tr4ker'
+                    results.append(parsed)
+            
+            logger.info(f"Found {len(results)} audiobooks on TR4KER for query: {query}")
+            
+            # Cache results
+            cache_search_results(f"tr4ker_{query}", results)
+            
+            return results
+        
+        except requests.RequestException as e:
+            logger.error(f"TR4KER search error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"TR4KER parsing error: {e}")
+            return []
+    
+    def _parse_torznab_item(self, item: Dict) -> Optional[Dict]:
+        """Parse a single Torznab XML item (same format as c411)"""
+        try:
+            title = item.get('title', 'Unknown')
+            guid = item.get('guid', {})
+            
+            if isinstance(guid, dict):
+                guid = guid.get('#text', '')
+            
+            # Extract torznab attributes
+            attrs = item.get('torznab:attr', [])
+            if isinstance(attrs, dict):
+                attrs = [attrs]
+            
+            attr_dict = {attr.get('@name'): attr.get('@value') for attr in attrs if '@name' in attr}
+            
+            # Get magnet URL or construct from infohash
+            magnet_url = attr_dict.get('magneturl')
+            if not magnet_url:
+                infohash = attr_dict.get('infohash')
+                if infohash:
+                    magnet_url = f"magnet:?xt=urn:btih:{infohash}"
+            
+            if not magnet_url:
+                logger.debug(f"No magnet URL for: {title}")
+                return None
+            
+            # Extract metadata
+            size = int(attr_dict.get('size', 0))
+            seeders = int(attr_dict.get('seeders', 0))
+            
+            # Detect format from title
+            format_type = 'mp3'  # default
+            title_lower = title.lower()
+            if '.m4b' in title_lower or 'm4b' in title_lower:
+                format_type = 'm4b'
+            elif '.m4a' in title_lower:
+                format_type = 'm4a'
+            
+            # Extract author from title
+            # Pattern c411: Titre.Mots.Prénom.Nom.YYYY.LANG.[Format]-TAG
+            author = "Unknown Author"
+            clean_title = title
+            
+            # Try c411 pattern first (most common)
+            import re
+            match = re.search(r'^(.+?)\.(\d{4})\.(FR|EN|fr|en|Es|es)', title, re.IGNORECASE)
+            if match:
+                # Everything before year
+                before_year = match.group(1)
+                parts = before_year.split('.')
+                
+                # Author is typically the last 2 words before year (Prénom Nom)
+                # But can be 1 or 3 words (just Nom, or Prénom Deuxième Nom)
+                if len(parts) >= 3:
+                    # Try to extract author (last 2 words)
+                    author_parts = parts[-2:]
+                    author = ' '.join(author_parts).title()
+                    
+                    # Title is everything before author
+                    title_parts = parts[:-2]
+                    clean_title = ' '.join(title_parts).title()
+                elif len(parts) >= 2:
+                    # Fallback: last word is author
+                    author = parts[-1].title()
+                    clean_title = ' '.join(parts[:-1]).title()
+            
+            # Fallback to other patterns if c411 pattern didn't match
+            elif ' - ' in title:
+                parts = title.split(' - ', 1)
+                author = parts[0].strip()
+                clean_title = parts[1].strip()
+            elif ' by ' in title.lower():
+                parts = title.lower().split(' by ')
+                if len(parts) == 2:
+                    clean_title = parts[0].strip().title()
+                    author = parts[1].strip().title()
+            
+            # Clean title (remove common tags and format info)
+            for tag in ['[Audiobook]', '[Unabridged]', '[Abridged]', '[MP3]', '[M4B]', 
+                       '(Audiobook)', '(Unabridged)', '(Abridged)', '-NOTAG', '-notag']:
+                clean_title = clean_title.replace(tag, '').strip()
+            
+            # Remove format patterns like [MP3.128kbps], [Mp3.64Kbps], etc.
+            clean_title = re.sub(r'\[.*?(mp3|m4b|m4a).*?\]', '', clean_title, flags=re.IGNORECASE).strip()
+            
+            title = clean_title
+            
+            # Estimate duration (rough: 1MB ≈ 60 seconds for 128kbps)
+            estimated_duration = int((size / 1024 / 1024) * 60) if size > 0 else 0
+            
+            return {
+                'guid': guid,
+                'title': title,
+                'author': author,
+                'magnet': magnet_url,
+                'size': size,
+                'seeders': seeders,
+                'format': format_type,
+                'duration': estimated_duration
+            }
+        
+        except Exception as e:
+            logger.error(f"Error parsing TR4KER item: {e}")
             return None
 
 

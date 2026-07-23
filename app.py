@@ -54,7 +54,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from helpers import TorznabClient, AllDebridClient, AudibleClient
+from helpers import TorznabClient, Tr4kerClient, AllDebridClient, AudibleClient
 from routes import register_all_routes
 
 # Initialize Flask app
@@ -66,6 +66,7 @@ app.json.ensure_ascii = False
 
 # Configuration from environment variables
 C411_API_KEY = os.environ.get('C411_API_KEY')
+TR4KER_API_KEY = os.environ.get('TR4KER_API_KEY')
 ALLDEBRID_API_KEY = os.environ.get('ALLDEBRID_API_KEY')
 ECLIPSE_API_KEY = os.environ.get('ECLIPSE_API_KEY', '')  # Optional token validation
 
@@ -73,6 +74,10 @@ ECLIPSE_API_KEY = os.environ.get('ECLIPSE_API_KEY', '')  # Optional token valida
 if not C411_API_KEY:
     logger.error("C411_API_KEY environment variable is required")
     raise ValueError("C411_API_KEY not configured")
+
+if not TR4KER_API_KEY:
+    logger.error("TR4KER_API_KEY environment variable is required")
+    raise ValueError("TR4KER_API_KEY not configured")
 
 if not ALLDEBRID_API_KEY:
     logger.error("ALLDEBRID_API_KEY environment variable is required")
@@ -116,13 +121,14 @@ logger.info("HTTP session configured with connection pooling")
 
 # Initialize API clients
 torznab_client = TorznabClient(C411_API_KEY, session)
+tr4ker_client = Tr4kerClient(TR4KER_API_KEY, session)
 alldebrid_client = AllDebridClient(ALLDEBRID_API_KEY, session)
 audible_client = AudibleClient(session)
 
-logger.info("API clients initialized (c411 + AllDebrid + Audible)")
+logger.info("API clients initialized (c411 + TR4KER + AllDebrid + Audible)")
 
 # Register all routes
-register_all_routes(app, ECLIPSE_API_KEY, torznab_client, alldebrid_client, audible_client, streaming_session)
+register_all_routes(app, ECLIPSE_API_KEY, torznab_client, tr4ker_client, alldebrid_client, audible_client, streaming_session)
 
 logger.info("All routes registered")
 
